@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Env
+.env
+.env.local
+
+# Node / Expo
+node_modules/
+.expo/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
