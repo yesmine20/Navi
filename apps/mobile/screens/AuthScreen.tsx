@@ -12,6 +12,7 @@ import { supabase } from "../lib/supabase";
 export default function AuthScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
   const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +30,13 @@ export default function AuthScreen() {
       return;
     }
 
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    // Stored in auth.users.raw_user_meta_data (Supabase's built-in per-user metadata) rather
+    // than a new profile table — one field, no join needed to greet the user by name.
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { first_name: firstName.trim() } },
+    });
     setLoading(false);
     if (error) {
       setError(error.message);
@@ -52,6 +59,14 @@ export default function AuthScreen() {
         {mode === "signIn" ? "Connexion" : "Créer un compte"}
       </Text>
 
+      {mode === "signUp" && (
+        <TextInput
+          style={styles.input}
+          placeholder="Prénom"
+          value={firstName}
+          onChangeText={setFirstName}
+        />
+      )}
       <TextInput
         style={styles.input}
         placeholder="Email"
@@ -74,7 +89,7 @@ export default function AuthScreen() {
       <TouchableOpacity
         style={styles.button}
         onPress={submit}
-        disabled={loading || !email || !password}
+        disabled={loading || !email || !password || (mode === "signUp" && !firstName.trim())}
       >
         {loading ? (
           <ActivityIndicator color="#fff" />

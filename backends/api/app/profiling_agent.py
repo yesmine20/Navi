@@ -12,16 +12,25 @@ Two clearly separate steps, deliberately not blurred together:
 
 Both run inside one Data MCP session (docs/ARCHITECTURE.md §1) opened once per invocation —
 the token travels as a tool argument (see mcp_servers/data_mcp.py's module docstring for why).
+
+Tool calls go through the raw MCP `ClientSession.call_tool`, not `langchain-mcp-adapters`'
+LangChain-tool wrapper — that wrapper's `.ainvoke()` is built for handing results to an LLM's
+tool-calling loop, and always returns them as message-shaped content blocks (e.g. a
+`list[dict]` tool result comes back as one text block *per item*, a plain `dict` return isn't
+structured at all). Nothing here hands a result to an LLM; this is plain data access, and that
+wrapping caused a real bug (a `KeyError: 'axis'` from treating a content block as a profile
+row). See mcp_servers/data_mcp.py's docstring for the other half of the fix (tools return a
+JSON string explicitly, parsed with `json.loads` here — one predictable shape, always).
 """
 
+import json
 import os
 import statistics
 import sys
+import uuid
 from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.graph import END, StateGraph
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -45,14 +54,18 @@ _SYSTEM_PROMPT = (
 
 class ProfilingState(TypedDict):
     token: str
-    tools: dict[str, BaseTool]
+    session: ClientSession
     profile: list[dict[str, Any]]
     proposal: AdaptationProposal | None
     validated: AdaptationProposal | None
 
 
-def _tool(state: ProfilingState, name: str) -> BaseTool:
-    return state["tools"][name]
+async def _call_tool(session: ClientSession, name: str, args: dict) -> Any:
+    result = await session.call_tool(name, args)
+    if result.isError:
+        text = result.content[0].text if result.content else "unknown error"
+        raise RuntimeError(f"MCP tool '{name}' failed: {text}")
+    return json.loads(result.content[0].text)
 
 
 # --- Evidence -> capability_profile reduction -------------------------------------------
@@ -108,24 +121,24 @@ async def _merge_evidence(state: ProfilingState) -> ProfilingState:
     or an empty one if even the read below fails, in which case `_propose_adaptation`
     proposes nothing rather than guess.
     """
-    get_evidence = _tool(state, "get_evidence")
-    upsert = _tool(state, "upsert_capability_profile")
+    session = state["session"]
 
     for axis in AXES:
         try:
-            rows = await get_evidence.ainvoke({"token": state["token"], "axis": axis})
+            rows = await _call_tool(session, "get_evidence", {"token": state["token"], "axis": axis})
             if not rows:
                 continue
             score, trend = _score_from_evidence(axis, rows)
-            await upsert.ainvoke(
-                {"token": state["token"], "axis": axis, "score": score, "trend": trend}
+            await _call_tool(
+                session,
+                "upsert_capability_profile",
+                {"token": state["token"], "axis": axis, "score": score, "trend": trend},
             )
         except Exception as exc:  # noqa: BLE001 — one axis failing must not block the rest
             print(f"[profiling_agent] evidence merge failed for axis={axis}: {exc}")
 
-    get_profile = _tool(state, "get_capability_profile")
     try:
-        profile = await get_profile.ainvoke({"token": state["token"]})
+        profile = await _call_tool(session, "get_capability_profile", {"token": state["token"]})
     except Exception as exc:  # noqa: BLE001 — no profile is a valid "propose nothing" case
         print(f"[profiling_agent] capability_profile read failed: {exc}")
         profile = []
@@ -160,11 +173,29 @@ async def _validate(state: ProfilingState) -> ProfilingState:
     if state["proposal"] is None:
         return {**state, "validated": None}
 
-    get_latest = _tool(state, "get_latest_accepted_adaptation")
-    previous_raw = await get_latest.ainvoke({"token": state["token"]})
+    previous_raw = await _call_tool(state["session"], "get_latest_accepted_adaptation", {"token": state["token"]})
     previous = AdaptationProposal.model_validate(previous_raw) if previous_raw else None
 
     validated = validate_proposal(state["proposal"], previous)
+
+    # Persist immediately (auto-accept model) so GET /me/adaptation can reapply this later
+    # without re-invoking the LLM, and so the next run's monotonicity check above has
+    # something to compare against. Best-effort: the proposal is already validated and worth
+    # returning to the caller even if this write fails (e.g. a transient DB hiccup) — it just
+    # means this particular decision won't be the one replayed next time.
+    try:
+        await _call_tool(
+            state["session"],
+            "record_accepted_adaptation",
+            {
+                "token": state["token"],
+                "adaptation_id": str(uuid.uuid4()),
+                "proposed": validated.model_dump(),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — persistence failure must not lose the response
+        print(f"[profiling_agent] failed to record accepted adaptation: {exc}")
+
     return {**state, "validated": validated}
 
 
@@ -193,18 +224,10 @@ async def run_profiling_agent(token: str) -> AdaptationProposal | None:
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            # handle_tool_errors=False: an MCP tool error raises a ToolException instead of
-            # coming back as a normal-looking result (langchain-mcp-adapters' default is to
-            # return errors as a "successful" tool message so an LLM can self-correct — but
-            # nothing here hands MCP results to an LLM, so a swallowed error would instead
-            # silently corrupt state, e.g. `profile` becoming error-content instead of rows).
-            # The try/except in _merge_evidence and _validate depend on this actually raising.
-            tools_list = await load_mcp_tools(session, handle_tool_errors=False)
-            tools = {t.name: t for t in tools_list}
 
             initial: ProfilingState = {
                 "token": token,
-                "tools": tools,
+                "session": session,
                 "profile": [],
                 "proposal": None,
                 "validated": None,

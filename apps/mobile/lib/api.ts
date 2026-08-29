@@ -43,3 +43,21 @@ export async function refreshProfile(): Promise<AdaptationProposal | null> {
   }
   return (await response.json()) as AdaptationProposal;
 }
+
+// GET /me/adaptation — cheap reuse path: rereads whatever was last accepted, no LLM call.
+// Call this on normal app opens/reopens; reserve refreshProfile() (which does invoke the
+// LLM) for when there's genuinely new evidence to reason over, e.g. right after finishing
+// the mini-games. Also doubles as "has this user already been profiled at least once?" —
+// App.tsx uses a non-null result here to decide whether to skip onboarding.
+export async function getLatestAdaptation(): Promise<AdaptationProposal | null> {
+  const response = await fetch(`${API_URL}/me/adaptation`, {
+    headers: { Authorization: await authHeader() },
+  });
+
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`me/adaptation failed (${response.status}): ${body}`);
+  }
+  return (await response.json()) as AdaptationProposal;
+}

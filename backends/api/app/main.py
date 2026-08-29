@@ -39,6 +39,32 @@ def get_capability_profile(user: AuthedUser = Depends(require_user)) -> list[dic
     return result.data
 
 
+@app.get("/me/adaptation")
+def get_latest_adaptation(response: Response, user: AuthedUser = Depends(require_user)) -> AdaptationProposal | None:
+    """Cheap reuse path: rereads whatever was last accepted, no LLM call. Direct Supabase
+    read (no Data MCP round trip), same pattern as /me/capability-profile — this is plain
+    data access, not agent reasoning. Meant to be called on every normal app open;
+    /profile/refresh (which does invoke the LLM) is reserved for when there's actually new
+    evidence to reason over, e.g. right after finishing the mini-games.
+
+    204 (no body) when this user has never had an adaptation accepted yet, same convention
+    as /profile/refresh.
+    """
+    client = rls_client(user.token)
+    result = (
+        client.table("adaptation_feedback")
+        .select("proposed, decided_at")
+        .eq("decision", "accept")
+        .order("decided_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        response.status_code = 204
+        return None
+    return AdaptationProposal.model_validate(result.data[0]["proposed"])
+
+
 class ChatRequest(BaseModel):
     message: str
 

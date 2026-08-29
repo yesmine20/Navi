@@ -16,8 +16,15 @@ function buildLayerACss(p: AdaptationProposal): string {
     p.contrast_mode === "high" ? "contrast(1.35) saturate(1.1)" : p.contrast_mode === "dark" ? "invert(1) hue-rotate(180deg)" : "none";
 
   return `
-    html { font-size: ${p.font_scale * 100}% !important; }
-    body, p, li, span, a, h1, h2, h3, h4, h5, h6 {
+    /* zoom, not font-size%: an arbitrary third-party site is never guaranteed to size its
+       text in em/rem (most don't — fixed px is extremely common), and font-size% only
+       rescales relative units. zoom rescales the actual rendered pixels regardless of how
+       the site authored its CSS, so it's the one approach that stays site-agnostic. */
+    html { zoom: ${p.font_scale} !important; }
+    /* universal selector, not an enumerated tag list: we can't know whether a given site's
+       text lives in <p>/<span> or in <div>/<td>/custom elements, so guessing tags silently
+       misses whatever the site actually used. */
+    * {
       line-height: ${lineSpacing} !important;
       letter-spacing: ${letterSpacing} !important;
     }
@@ -29,7 +36,10 @@ function buildLayerACss(p: AdaptationProposal): string {
     }
     ${
       p.touch_target_boost
-        ? "a, button, input, select, [role='button'] { min-height: 44px !important; min-width: 44px !important; padding: 8px !important; }"
+        ? // Same site-agnostic principle: match on semantics (real interactive tags, ARIA
+          // interactive roles, an onclick handler) rather than assuming a site only builds
+          // clickable controls out of <button>/<a>.
+          "a, button, input, select, textarea, summary, label, [role='button'], [role='link'], [role='checkbox'], [role='radio'], [role='tab'], [role='menuitem'], [onclick] { min-height: 44px !important; min-width: 44px !important; padding: 8px !important; }"
         : ""
     }
   `.trim();

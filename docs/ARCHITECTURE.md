@@ -239,21 +239,31 @@ Navi's own screens, so that work is pulled into the main sequence instead of def
 declutter classification pipeline, generalized safety boundary) that step 5 onward builds
 against.
 
-1. **Data layer + auth** — 3+1 table schema, token verification. **Done.**
+1. **Data layer + auth** — 3+1 table schema, token verification. **Done** (+ `saved_sites` as
+   a 5th table, added to support the browser home screen — not in the original 3+1, see §2).
 2. **Orchestrator + LLM gateway** — one provider wired through LangGraph, a working
-   conversational loop, before anything agentic or adaptive.
+   conversational loop, before anything agentic or adaptive. **Done** (`POST /chat`).
 3. **Data MCP + Profiling & Adaptation Agent**, proven against the 3 mini-games already
    producing real `evidence_log` rows. Prove the propose → validate → consent loop end to
    end, including the hard validator — built from the start as the generic adaptation
    vocabulary validator (`THIRD_PARTY_ADAPTATION.md` §2), not a Navi-screens-only selector
-   whitelist, since that intermediate step is intentionally being skipped.
+   whitelist, since that intermediate step is intentionally being skipped. **Done**
+   (`POST /profile/refresh`; merge → propose → validate all tested, including graceful
+   degradation with no live Supabase project).
 4. **A2A wiring** between Orchestrator and the Profiling agent — the simplest possible
-   delegation, to prove the protocol layer before adding a second specialist.
-5. **WebView screen + Browser Bridge MCP** — the injection surface. One page loading and one
-   round trip working end to end before anything is applied to it.
+   delegation, to prove the protocol layer before adding a second specialist. **Not started**
+   — `/profile/refresh` currently calls the Profiling Agent directly, bypassing the
+   Orchestrator entirely; the two aren't wired together yet.
+5. **WebView screen + Browser Bridge MCP** — the injection surface. **Partially done**: the
+   mobile WebView screen (home grid of saved sites + browser) exists and works. Browser
+   Bridge MCP itself (the backend WebSocket bridge) turned out to be unnecessary for this —
+   Layer A needs no backend round trip during browsing (`THIRD_PARTY_ADAPTATION.md` §5), so
+   it's deferred until step 9 (Task Automation Agent) or step 8 (Layer B) actually needs it.
 6. **Layer A — generic styling adaptations** (`THIRD_PARTY_ADAPTATION.md` §2) applied end to
-   end on real third-party pages. This is the first real "adapts any site" result, and has
-   no detection dependency, so it's the fastest path to something demonstrably working.
+   end on real third-party pages. **Built**, correctness verified in isolation (unit tests +
+   a live end-to-end 204/401/JWKS pass against the real Supabase project) — **not yet seen
+   working on a real device**, blocked on Expo Go's SDK support lagging the project's SDK
+   version (resolved 2026-08-26 by downgrading the project to SDK 54).
 7. **Web Reader MCP + Scanner MCP** — main-content extraction and vision classification,
    the prerequisites for decluttering, built once Layer A is validated.
 8. **Layer B — decluttering** (`THIRD_PARTY_ADAPTATION.md` §3-4): heuristic pass, vision

@@ -74,6 +74,23 @@ def _build_providers() -> list[_Provider]:
                 ),
             )
         )
+    if settings.mistral_api_key:
+        from langchain_mistralai import ChatMistralAI
+
+        providers.append(
+            _Provider(
+                name="mistral",
+                model=ChatMistralAI(
+                    # mistral-large-latest returned 403 "tier_not_allowed" on this account's
+                    # subscription — the small model is available on lower tiers and is still
+                    # fully capable of the structured-output task this gateway asks of it.
+                    model="mistral-small-latest",
+                    api_key=settings.mistral_api_key,
+                    timeout=30,
+                    max_retries=0,  # retries are the gateway's job, not the SDK's
+                ),
+            )
+        )
     return providers
 
 
